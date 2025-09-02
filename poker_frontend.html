@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Texas Hold'em Poker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body {
+            background-color: #1a202c;
+            color: #e2e8f0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+        }
+        .poker-table {
+            background-color: #2d572c;
+            border: 20px solid #5a3a22;
+            box-shadow: 0 0 20px rgba(0,0,0,0.7) inset, 0 0 10px rgba(0,0,0,0.5);
+        }
+        .player-details.active {
+            transform: scale(1.05);
+            border-color: #f59e0b;
+            box-shadow: 0 0 15px #f59e0b;
+        }
+        .player-pod, .player-details {
+            transition: all 0.3s ease;
+        }
+        .player-details {
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+        }
+        .player-details.folded {
+            opacity: 0.5;
+        }
+        .card {
+            width: 70px;
+            height: 100px;
+            background-color: white;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            color: black;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 2rem;
+            font-weight: bold;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        .card.red { color: #dc2626; }
+        .card .rank-top, .card .rank-bottom {
+            position: absolute;
+            font-size: 1rem;
+            line-height: 1;
+        }
+        .card .rank-top { top: 5px; left: 5px; }
+        .card .rank-bottom { bottom: 5px; right: 5px; transform: rotate(180deg); }
+        .card.placeholder { background-color: #4a5568; border-color: #2d3748;}
+        .dealer-button {
+            width: 30px; height: 30px; background-color: #fef08a; color: #713f12;
+            border: 2px solid #ca8a04; box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+        }
+        .log-container {
+            height: 40vh;
+            background-color: rgba(0,0,0,0.3);
+            border-top: 2px solid #4a5568;
+        }
+        .log-container p {
+            padding: 4px 8px;
+            border-bottom: 1px solid #2d3748;
+        }
+        .raise-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #f59e0b;
+            cursor: pointer;
+            border-radius: 50%;
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen">
+
+    <div class="flex-grow flex items-center justify-center p-4">
+        <div class="relative w-full max-w-7xl aspect-[16/9]">
+            <div class="poker-table absolute inset-0 rounded-full"></div>
+            <div id="player-0" class="player-pod absolute bottom-0 left-1/2 -translate-x-1/2 -translate-y-4"></div>
+            <div id="player-1" class="player-pod absolute top-1/2 left-0 -translate-y-1/2 translate-x-4"></div>
+            <div id="player-2" class="player-pod absolute top-0 left-1/2 -translate-x-1/2 translate-y-4"></div>
+            <div id="player-3" class="player-pod absolute top-1/2 right-0 -translate-y-1/2 -translate-x-4"></div>
+            <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center space-y-4">
+                <div id="pot-display" class="bg-gray-900/50 rounded-lg px-4 py-2 text-xl font-bold shadow-lg">Pot: $0</div>
+                <div id="community-cards-container" class="flex space-x-2"></div>
+                <div id="timer-display" class="text-amber-400 text-lg font-bold h-6"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="flex bg-gray-900">
+        <div id="log-container" class="log-container w-2/3 overflow-y-auto p-2"></div>
+        <div id="controls" class="w-1/3 p-4 flex flex-col items-center justify-center space-y-2 border-l-2 border-gray-700"></div>
+    </div>
+    
+    <template id="player-pod-template">
+        <div class="player-details bg-gray-900/70 border-2 border-gray-700 rounded-lg p-2 flex flex-col items-center min-w-[180px]">
+            <div class="player-name text-lg font-bold"></div><div class="player-chips text-amber-400 font-semibold"></div><div class="player-status text-sm text-red-400 h-5 font-bold"></div>
+            <div class="relative">
+                <div class="card-container flex space-x-1 mt-2"></div>
+                <div class="dealer-button absolute -top-2 -right-4 rounded-full flex items-center justify-center font-bold text-sm hidden">D</div>
+                <div class="player-bet absolute -bottom-3 left-1/2 -translate-x-1/2 bg-gray-800 rounded-full px-3 py-1 text-sm font-semibold border border-amber-500 hidden"></div>
+            </div>
+        </div>
+    </template>
+    <template id="card-template"><div class="card"><span class="rank-top"></span><span class="suit-center"></span><span class="rank-bottom"></span></div></template>
+    <template id="player-controls-template">
+        <div class="grid grid-cols-2 gap-2 w-full">
+            <button id="fold-btn" class="bg-red-700 hover:bg-red-600 rounded p-2 font-bold text-lg transition">Fold</button>
+            <button id="check-btn" class="bg-gray-600 hover:bg-gray-500 rounded p-2 font-bold text-lg transition">Check</button>
+            <button id="call-btn" class="bg-sky-700 hover:bg-sky-600 rounded p-2 font-bold text-lg transition">Call</button>
+            <button id="raise-btn" class="bg-amber-600 hover:bg-amber-500 rounded p-2 font-bold text-lg transition">Raise</button>
+        </div>
+        <div id="raise-container" class="w-full pt-2">
+            <div class="flex items-center space-x-2">
+                <input type="range" id="raise-slider" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer raise-slider">
+                <input type="number" id="raise-input" class="w-24 bg-gray-800 border border-gray-600 rounded text-center">
+            </div>
+        </div>
+    </template>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<script>
+    const socket = io("http://127.0.0.1:5001", { transports: ["websocket"] });
+
+    const playerPodTemplate = document.getElementById('player-pod-template');
+    const cardTemplate = document.getElementById('card-template');
+    const controlsTemplate = document.getElementById('player-controls-template');
+    const logContainer = document.getElementById('log-container');
+    const controlsContainer = document.getElementById('controls');
+    const potDisplay = document.getElementById('pot-display');
+    const communityCardsContainer = document.getElementById('community-cards-container');
+    const timerDisplay = document.getElementById('timer-display');
+    const humanPlayerName = 'You';
+    
+    let myTurn = false;
+
+    socket.on('connect', () => { logMessage('Connected to server.', 'success'); showWaitingMessage(); });
+    socket.on('log_message', (message) => logMessage(message));
+    
+    socket.on('game_state_update', (state) => {
+        renderGameState(state);
+        if (myTurn) return;
+        
+        const humanPlayer = state.players.find(p => p.name === humanPlayerName);
+        const humanIndex = state.players.indexOf(humanPlayer);
+        if (state.currentPlayerIndex !== humanIndex || !humanPlayer?.inHand) {
+            showWaitingMessage();
+        }
+    });
+
+    socket.on('your_turn', (data) => {
+        myTurn = true;
+        updateControls(data);
+    });
+    
+    socket.on('timer_update', (data) => { timerDisplay.textContent = data.countdown > 0 ? `Next hand in ${data.countdown}...` : ''; });
+
+    function logMessage(message, type = 'info') {
+        const p = document.createElement('p');
+        p.textContent = message;
+        if (type === 'success') p.classList.add('text-green-400');
+        if (type === 'error') p.classList.add('text-red-400');
+        logContainer.appendChild(p);
+        logContainer.scrollTop = logContainer.scrollHeight;
+    }
+    
+    function showWaitingMessage() {
+        controlsContainer.innerHTML = '<p class="text-gray-400">Waiting for other players...</p>';
+    }
+
+    function renderGameState(state) {
+        const humanIndex = state.players.findIndex(p => p.name === humanPlayerName);
+        if (humanIndex === -1) return;
+        
+        state.players.forEach((player, index) => {
+            const posIndex = (index - humanIndex + state.players.length) % state.players.length;
+            const podEl = document.getElementById(`player-${posIndex}`);
+            if (!podEl.innerHTML) podEl.append(playerPodTemplate.content.cloneNode(true));
+            
+            const detailsEl = podEl.querySelector('.player-details');
+            detailsEl.querySelector('.player-name').textContent = player.name;
+            detailsEl.querySelector('.player-chips').textContent = `$${player.chips}`;
+            detailsEl.querySelector('.player-status').textContent = player.status || '';
+            
+            detailsEl.classList.toggle('active', state.currentPlayerIndex === index);
+            detailsEl.classList.toggle('folded', !player.inHand);
+
+            podEl.querySelector('.dealer-button').classList.toggle('hidden', state.dealerPos !== index);
+            
+            const betEl = podEl.querySelector('.player-bet');
+            betEl.textContent = `$${player.bet}`;
+            betEl.classList.toggle('hidden', player.bet <= 0);
+            
+            const cardContainer = podEl.querySelector('.card-container');
+            cardContainer.innerHTML = '';
+            (player.hand.length > 0 ? player.hand : [{}, {}]).forEach(cardData => {
+                const cardEl = cardTemplate.content.cloneNode(true).firstElementChild;
+                if (cardData.rank) {
+                    cardEl.classList.toggle('red', cardData.color === 'red');
+                    cardEl.querySelector('.rank-top').textContent = cardData.rank + cardData.suit;
+                    cardEl.querySelector('.suit-center').textContent = cardData.suit;
+                    cardEl.querySelector('.rank-bottom').textContent = cardData.rank + cardData.suit;
+                } else cardEl.classList.add('placeholder');
+                cardContainer.appendChild(cardEl);
+            });
+        });
+
+        potDisplay.textContent = `Pot: $${state.pot}`;
+        communityCardsContainer.innerHTML = '';
+        state.communityCards.forEach(cardData => {
+            const cardEl = cardTemplate.content.cloneNode(true).firstElementChild;
+            cardEl.classList.toggle('red', cardData.color === 'red');
+            cardEl.querySelector('.rank-top').textContent = cardData.rank + cardData.suit;
+            cardEl.querySelector('.suit-center').textContent = cardData.suit;
+            cardEl.querySelector('.rank-bottom').textContent = cardData.rank + cardData.suit;
+            communityCardsContainer.appendChild(cardEl);
+        });
+        for (let i = state.communityCards.length; i < 5; i++) {
+             const cardEl = cardTemplate.content.cloneNode(true).firstElementChild;
+             cardEl.classList.add('placeholder');
+             communityCardsContainer.appendChild(cardEl);
+        }
+    }
+
+    function updateControls(data) {
+        controlsContainer.innerHTML = '';
+        controlsContainer.append(controlsTemplate.content.cloneNode(true));
+        const canCheck = data.toCall === 0;
+
+        const foldBtn = document.getElementById('fold-btn'), checkBtn = document.getElementById('check-btn'), callBtn = document.getElementById('call-btn'), raiseBtn = document.getElementById('raise-btn'), raiseSlider = document.getElementById('raise-slider'), raiseInput = document.getElementById('raise-input');
+
+        foldBtn.onclick = () => sendAction('fold');
+        checkBtn.onclick = () => sendAction('check');
+        callBtn.onclick = () => sendAction('call');
+
+        checkBtn.classList.toggle('hidden', !canCheck);
+        callBtn.classList.toggle('hidden', canCheck);
+        if(!canCheck) callBtn.textContent = `Call $${data.toCall}`;
+
+        const minRaise = data.toCall + data.minRaise;
+        const maxRaise = data.chips + data.toCall;
+
+        raiseBtn.textContent = canCheck ? 'Bet' : 'Raise';
+        raiseSlider.min = minRaise; raiseSlider.max = maxRaise; raiseSlider.value = minRaise;
+        raiseInput.min = minRaise; raiseInput.max = maxRaise; raiseInput.value = minRaise;
+
+        raiseSlider.oninput = () => raiseInput.value = raiseSlider.value;
+        raiseInput.oninput = () => raiseSlider.value = raiseInput.value;
+
+        raiseBtn.onclick = () => {
+            const betAmount = parseInt(raiseInput.value);
+            if (betAmount >= minRaise && betAmount <= maxRaise) {
+                sendAction(canCheck ? 'bet' : 'raise', betAmount);
+            } else {
+                raiseInput.classList.add('border-red-500', 'border-2');
+                setTimeout(() => raiseInput.classList.remove('border-red-500', 'border-2'), 1500);
+            }
+        };
+    }
+
+    function sendAction(action, amount = 0) {
+        myTurn = false;
+        socket.emit('player_action', { action, amount });
+        showWaitingMessage(); 
+    }
+</script>
+</body>
+</html>
+
